@@ -13,16 +13,16 @@
 # this is the version we obsolete up to. The packaging changed for Origin
 # 1.0.6 and OSE 3.1 such that 'openshift' package names were no longer used.
 %global package_refactor_version 3.0.2.900
-%global golang_version 1.9.1
+%global golang_version 1.10
 # %commit and %os_git_vars are intended to be set by tito custom builders provided
 # in the .tito/lib directory. The values in this spec file will not be kept up to date.
 %{!?commit:
-%global commit 5fbdb8976949b33b2a627a3dfedf4e3255b9c307
+%global commit 86b5e46426ba828f49195af21c56f7c6674b48f7
 }
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
 # os_git_vars needed to run hack scripts during rpm builds
 %{!?os_git_vars:
-%global os_git_vars OS_GIT_VERSION=v3.11.0-alpha.0 OS_GIT_COMMIT=5fbdb89 OS_GIT_MAJOR=3 OS_GIT_MINOR=11+ OS_GIT_TREE_STATE=clean KUBE_GIT_MAJOR=1 KUBE_GIT_MINOR=10+ KUBE_GIT_VERSION=v1.10.0+b81c8f8 KUBE_GIT_COMMIT=b81c8f8e48a661f3cc94e2bd49760c7b6c424ee8
+%global os_git_vars OS_GIT_VERSION='' OS_GIT_COMMIT='' OS_GIT_MAJOR='' OS_GIT_MINOR='' OS_GIT_TREE_STATE=''
 }
 
 %if 0%{?skip_build}
@@ -61,9 +61,12 @@
 %global product_name Origin
 %endif
 
+%{!?version: %global version 0.0.1}
+%{!?release: %global release 1}
+
 Name:           %{package_name}
-Version:        3.11.0
-Release:        alpha.0
+Version:        %{version}
+Release:        %{release}%{package_dist}
 Summary:        Open Source Container Management by Red Hat
 License:        ASL 2.0
 URL:            https://%{import_path}
@@ -75,7 +78,7 @@ ExclusiveArch:  %{go_arches}
 ExclusiveArch:  x86_64 aarch64 ppc64le s390x
 %endif
 
-Source0:        https://%{import_path}/archive/%{commit}/v%{version}-%{release}.tar.gz
+Source0:        https://%{import_path}/archive/%{commit}/%{name}-%{version}.tar.gz
 BuildRequires:  systemd
 BuildRequires:  bsdtar
 BuildRequires:  golang >= %{golang_version}
@@ -218,7 +221,7 @@ of docker.  Exclude those versions of docker.
 
 %prep
 %if 0%{do_prep}
-%setup -q -n origin-3.11.0-alpha.0
+%setup -q
 %endif
 
 %build
@@ -226,7 +229,7 @@ of docker.  Exclude those versions of docker.
 %if 0%{make_redistributable}
 # Create Binaries for all supported arches
 %{os_git_vars} OS_BUILD_RELEASE_ARCHIVES=n make build-cross
-%{os_git_vars} hack/build-go.sh vendor/github.com/onsi/ginkgo/ginkgo
+%{os_git_vars} OS_BUILD_RELEASE_ARCHIVES=n make build WHAT=vendor/github.com/onsi/ginkgo/ginkgo
 %else
 # Create Binaries only for building arch
 %ifarch x86_64
@@ -245,11 +248,11 @@ of docker.  Exclude those versions of docker.
   BUILD_PLATFORM="linux/s390x"
 %endif
 OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} OS_BUILD_RELEASE_ARCHIVES=n make build-cross
-OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} hack/build-go.sh vendor/github.com/onsi/ginkgo/ginkgo
+OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} OS_BUILD_RELEASE_ARCHIVES=n make build WHAT=vendor/github.com/onsi/ginkgo/ginkgo
 %endif
 
 # Generate man pages
-%{os_git_vars} hack/generate-docs.sh
+%{os_git_vars} make build-docs
 %endif
 
 %install
@@ -297,12 +300,11 @@ for cmd in \
     openshift-extract-image-content \
     openshift-f5-router \
     openshift-recycle \
-    openshift-router
+    openshift-router \
+    kubectl
 do
-    ln -s openshift %{buildroot}%{_bindir}/$cmd
+    ln -s oc %{buildroot}%{_bindir}/$cmd
 done
-
-ln -s oc %{buildroot}%{_bindir}/kubectl
 
 install -d -m 0755 %{buildroot}%{_sysconfdir}/origin/{master,node}
 
@@ -349,7 +351,7 @@ mkdir -p $RPM_BUILD_ROOT/usr/sbin
 
 # Install openshift-excluder script
 sed "s|@@CONF_FILE-VARIABLE@@|${OS_CONF_FILE}|" contrib/excluder/excluder-template > $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
-sed -i "s|@@PACKAGE_LIST-VARIABLE@@|%{name} %{name}-clients %{name}-clients-redistributable %{name}-master %{name}-node %{name}-pod %{name}-recycle %{name}-sdn-ovs %{name}-tests|" $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
+sed -i "s|@@PACKAGE_LIST-VARIABLE@@|%{name} %{name}-clients %{name}-clients-redistributable %{name}-master %{name}-node %{name}-pod %{name}-recycle %{name}-hyperkube %{name}-tests|" $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
 chmod 0744 $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
 
 # Install docker-excluder script
@@ -357,19 +359,14 @@ sed "s|@@CONF_FILE-VARIABLE@@|${OS_CONF_FILE}|" contrib/excluder/excluder-templa
 sed -i "s|@@PACKAGE_LIST-VARIABLE@@|docker*1.14* docker*1.15* docker*1.16* docker*1.17* docker*1.18* docker*1.19* docker*1.20*|" $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
 chmod 0744 $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
 
+# Give the excluders a consistent timestamp between multi-arch builds
+touch --reference=%{SOURCE0} $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
+touch --reference=%{SOURCE0} $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
+
 %files
 %doc README.md
 %license LICENSE
 %{_bindir}/openshift
-%{_bindir}/openshift-deploy
-%{_bindir}/openshift-f5-router
-%{_bindir}/openshift-recycle
-%{_bindir}/openshift-router
-%{_bindir}/openshift-docker-build
-%{_bindir}/openshift-sti-build
-%{_bindir}/openshift-git-clone
-%{_bindir}/openshift-extract-image-content
-%{_bindir}/openshift-manage-dockerfile
 %{_sharedstatedir}/origin
 %{_sysconfdir}/bash_completion.d/openshift
 %defattr(-,root,root,0700)
@@ -417,6 +414,15 @@ chmod 0744 $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
 %{_bindir}/oc
 %{_bindir}/kubectl
 %{_bindir}/oadm
+%{_bindir}/openshift-deploy
+%{_bindir}/openshift-docker-build
+%{_bindir}/openshift-sti-build
+%{_bindir}/openshift-git-clone
+%{_bindir}/openshift-extract-image-content
+%{_bindir}/openshift-manage-dockerfile
+%{_bindir}/openshift-f5-router
+%{_bindir}/openshift-recycle
+%{_bindir}/openshift-router
 %{_sysconfdir}/bash_completion.d/oc
 %{_mandir}/man1/oc*
 
